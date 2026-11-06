@@ -219,7 +219,14 @@ final class ClickMonitor {
         }
 
         let point = event.location
-        guard let decision = gate.evaluate(point: point, flags: event.flags) else {
+        let decision = gate.evaluate(point: point, flags: event.flags)
+        ClickTrace.log(
+            "mouseDown point=\(Int(point.x)),\(Int(point.y))"
+                + " frontmost=\(gate.debugFrontmostBundleID ?? "nil")"
+                + " targets=\(gate.debugTargetBundleIDs)"
+                + " decision=\(decision.map { "\($0.bundleIdentifier):\($0.mode.rawValue)" } ?? "nil")"
+        )
+        guard let decision else {
             // 未列入目标应用 / 被禁用 / 命中排除规则：完全旁路。
             return passThrough
         }
@@ -330,6 +337,11 @@ final class ClickMonitor {
 
         let elapsed = CFAbsoluteTimeGetCurrent() - state.startedAt
         let distance = hypot(event.location.x - state.point.x, event.location.y - state.point.y)
+        ClickTrace.log(
+            "longPressMouseUp elapsed=\(String(format: "%.2f", elapsed))"
+                + " distance=\(String(format: "%.1f", distance))"
+                + " threshold=\(configuration.longPressDuration)"
+        )
         guard elapsed >= configuration.longPressDuration,
               distance <= configuration.movementTolerance else {
             return passThrough

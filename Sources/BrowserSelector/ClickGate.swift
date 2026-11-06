@@ -101,6 +101,18 @@ final class ClickGate {
         return windowsByPID.values.reduce(0) { $0 + $1.count }
     }
 
+    var debugFrontmostBundleID: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return frontmostBundleID
+    }
+
+    var debugTargetBundleIDs: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return Array(targets.keys).sorted()
+    }
+
     func isTarget(bundleIdentifier: String?) -> Bool {
         guard let bundleIdentifier else { return false }
         lock.lock()
@@ -132,15 +144,15 @@ final class ClickGate {
     ) -> ClickDecision? {
         guard !exclusions.excludes(bundleIdentifier: bundleIdentifier) else { return nil }
 
-        // 快照超过 5 秒就跳过矩形命中判断，避免窗口移动后漏掉点击。
+        // 快照超过 5 秒就跳过矩形判断。窗口可能在两次激活之间移动，
+        // 因此“点不在缓存窗口内”不直接拒绝，避免漏掉真实链接点击；
+        // 缓存窗口只用于命中时读取标题做排除。
         if let windows = windowsByPID[frontmostPID], !windows.isEmpty,
            let updatedAt = windowsUpdatedAt[frontmostPID],
            CFAbsoluteTimeGetCurrent() - updatedAt < 5 {
-            let hit = windows.first {
+            if let hit = windows.first(where: {
                 $0.bounds.insetBy(dx: -2, dy: -2).contains(point)
-            }
-            guard let hit else { return nil }
-            if let title = hit.title, exclusions.excludes(windowTitle: title) {
+            }), let title = hit.title, exclusions.excludes(windowTitle: title) {
                 return nil
             }
         }

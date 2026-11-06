@@ -78,6 +78,8 @@ build/BrowserSelector.app/Contents/MacOS/BrowserSelector --benchmark 5 --no-tap
 
 未列入目标应用时只做字典查找即返回；「吞掉并回放」会立即投递解析任务，「旁路观察」只写一个小状态结构，mouseUp 时再比较时间/位移。AX、剪贴板、UI 和队列投递都在回调之外。与 1ms 的预算相比有两个数量级余量。
 
+只读消息文本区的 URL 提取只在 `AXValue` 含 `http` 时多一次 `AXRangeForPosition` IPC；普通点击/无 URL 文本不增加。输入框（`AXFocused` 或 `AXEditable`/`AXConfirm`）会跳过。
+
 长按阈值/位移判定有独立自测：
 
 ```bash

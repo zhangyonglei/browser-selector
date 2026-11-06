@@ -251,8 +251,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if monitor.start() {
             clickMonitor = monitor
+            ClickTrace.log("tap started trusted=\(PermissionManager.isAccessibilityTrusted ? 1 : 0)")
         } else {
             clickMonitor = nil
+            ClickTrace.log("tap start failed trusted=\(PermissionManager.isAccessibilityTrusted ? 1 : 0)")
         }
         updateStatusItemTitle()
     }
@@ -283,10 +285,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self else { return }
             guard let result else {
                 Log.debug("长按未解析到链接，回放 mouseUp pid=\(candidate.pid)")
+                ClickTrace.log("longPress result=nil replay mouseUp")
                 self.clickMonitor?.finishLongPress(candidateID: candidate.id, replay: true)
                 return
             }
             Log.debug("长按解析到链接 \(result.url.absoluteString)（\(result.source.displayName)）")
+            ClickTrace.log("longPress result=\(result.url.absoluteString) source=\(result.source.displayName)")
             DispatchQueue.main.async {
                 self.showPicker(url: result.url, candidate: candidate)
             }
@@ -306,10 +310,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self else { return }
             guard let result else {
                 Log.debug("未解析到链接，回放点击 pid=\(candidate.pid)")
+                ClickTrace.log("swallow result=nil replay click")
                 self.clickMonitor?.finish(candidateID: candidate.id, replay: true)
                 return
             }
             Log.debug("解析到链接 \(result.url.absoluteString)（\(result.source.displayName)）")
+            ClickTrace.log("swallow result=\(result.url.absoluteString) source=\(result.source.displayName)")
             DispatchQueue.main.async {
                 self.route(url: result.url, candidate: candidate)
             }
@@ -363,6 +369,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func presentPicker(url: URL, at point: CGPoint) -> Bool {
         let config = configStore.config
         let browsers = config.enabledBrowsers.filter { browserLauncher.canResolve($0) }
+        ClickTrace.log(
+            "presentPicker url=\(url.absoluteString)"
+                + " browsers=\(browsers.map { $0.displayName })"
+                + " at=\(Int(point.x)),\(Int(point.y))"
+        )
         guard !browsers.isEmpty else {
             scanBrowsers()
             return false
