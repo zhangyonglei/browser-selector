@@ -27,6 +27,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - 生命周期
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        DistributedNotificationCenter.default().addObserver(
+            forName: .browserSelectorShowSettings,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.openSettings()
+        }
+
         pickerController = PickerController(launcher: browserLauncher)
         pickerController.onVisibilityChanged = { [weak self] visible in
             guard let self else { return }

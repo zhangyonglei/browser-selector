@@ -108,6 +108,8 @@ $BIN --benchmark-panel        # 面板显示/关闭
 $BIN --benchmark-click        # 回调判定微基准
 ```
 
+> 应用是单实例的；运行基准前先退出已经常驻的 BrowserSelector，否则第二个进程会被锁挡下。
+
 说明：
 
 - 直接从终端运行 SwiftPM 产物时，辅助功能权限归属于终端进程；打包成 `.app` 后需要在系统设置里给 `BrowserSelector.app` 单独授权。
