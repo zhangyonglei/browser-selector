@@ -1,4 +1,4 @@
-.PHONY: build test app run benchmark project clean
+.PHONY: build test app run benchmark project icon clean
 
 build:
 	swift build
@@ -17,6 +17,9 @@ benchmark:
 
 project:
 	xcodegen generate
+
+icon:
+	python3 scripts/make-icon.py
 
 clean:
 	rm -rf .build build

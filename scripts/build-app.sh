@@ -13,6 +13,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp "$BIN_DIR/BrowserSelector" "$APP/Contents/MacOS/BrowserSelector"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 chmod +x "$APP/Contents/MacOS/BrowserSelector"
 
 # ad-hoc 签名即可本地运行。若要避免每次重建后重新授权辅助功能，

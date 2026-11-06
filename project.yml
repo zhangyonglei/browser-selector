@@ -27,6 +27,8 @@ targets:
     platform: macOS
     sources:
       - path: Sources/BrowserSelector
+      - path: Resources/AppIcon.icns
+        buildPhase: resources
     dependencies:
       - package: BrowserSelectorPackage
         product: BrowserSelectorCore
@@ -37,6 +39,7 @@ targets:
         CFBundleDevelopmentRegion: zh_CN
         CFBundleDisplayName: 浏览器选择器
         CFBundleExecutable: BrowserSelector
+        CFBundleIconFile: AppIcon
         CFBundleIdentifier: com.zyl.BrowserSelector
         CFBundleName: BrowserSelector
         CFBundlePackageType: APPL

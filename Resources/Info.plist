@@ -8,6 +8,8 @@
 	<string>浏览器选择器</string>
 	<key>CFBundleExecutable</key>
 	<string>BrowserSelector</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.zyl.BrowserSelector</string>
 	<key>CFBundleInfoDictionaryVersion</key>

@@ -1,3 +1,5 @@
+<p><img src="docs/icon.png" width="80" alt="BrowserSelector 图标"></p>
+
 # 浏览器选择器（BrowserSelector）
 
 macOS 菜单栏常驻工具：在目标应用（默认钉钉 / 微信 / QQ）里按应用配置触发，在光标位置弹出浏览器选择面板，用你指定的浏览器打开。未列入目标应用的应用完全旁路，短按也不会影响原有行为。
@@ -53,6 +55,7 @@ Sources/BrowserSelector/         AppKit 常驻进程
 
 Tests/BrowserSelectorCoreTests/  32 个单元测试
 scripts/build-app.sh             release 构建 + .app 打包 + ad-hoc 签名
+scripts/make-icon.py             生成 Resources/AppIcon.icns（Pillow 绘制 + iconutil）
 scripts/benchmark.sh             空闲性能基准
 project.yml                      XcodeGen 工程描述
 ```
