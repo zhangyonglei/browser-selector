@@ -74,6 +74,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
+        if arguments.contains("--test-longpress") {
+            runLongPressSelfTest()
+            NSApp.terminate(nil)
+            return
+        }
+
         if arguments.contains("--preview") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
                 self?.previewPicker(centered: true)
@@ -100,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         clickGate.setTargets(config.enabledTargetApplications)
         clickGate.setExclusions(config.exclusions)
         clickGate.setPaused(isPaused)
+        clickMonitor?.configure(interactionConfiguration())
         updateStatusItemTitle()
         refreshFrontmost()
     }
@@ -229,8 +236,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         let monitor = ClickMonitor(gate: clickGate)
+        monitor.configure(interactionConfiguration())
         monitor.onCandidate = { [weak self] candidate in
             self?.handle(candidate)
+        }
+        monitor.onLongPressCandidate = { [weak self] candidate in
+            self?.handleLongPress(candidate)
         }
         monitor.onOutsideClickWhilePanelVisible = { [weak self] in
             DispatchQueue.main.async {
@@ -249,6 +260,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func stopMonitoring() {
         clickMonitor?.stop()
         clickMonitor = nil
+    }
+
+    private func interactionConfiguration() -> InteractionConfiguration {
+        let behavior = configStore.config.behavior
+        return InteractionConfiguration(
+            longPressDuration: Double(behavior.longPressDurationMilliseconds) / 1_000,
+            movementTolerance: 8
+        )
+    }
+
+    private func handleLongPress(_ candidate: LongPressCandidate) {
+        let baseline = PasteboardProbe.changeCount()
+        let delay = configStore.config.behavior.clipboardFallbackDelayMilliseconds
+
+        linkExtractor.extract(
+            at: candidate.location,
+            pid: candidate.pid,
+            clipboardBaseline: baseline,
+            delayMilliseconds: delay
+        ) { [weak self] result in
+            guard let self else { return }
+            guard let result else {
+                Log.debug("长按未解析到链接，回放 mouseUp pid=\(candidate.pid)")
+                self.clickMonitor?.finishLongPress(candidateID: candidate.id, replay: true)
+                return
+            }
+            Log.debug("长按解析到链接 \(result.url.absoluteString)（\(result.source.displayName)）")
+            DispatchQueue.main.async {
+                self.showPicker(url: result.url, candidate: candidate)
+            }
+        }
     }
 
     private func handle(_ candidate: ClickCandidate) {
@@ -303,24 +345,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func showPicker(url: URL, candidate: ClickCandidate) {
+        guard presentPicker(url: url, at: candidate.location) else {
+            clickMonitor?.finish(candidateID: candidate.id, replay: true)
+            return
+        }
+        clickMonitor?.finish(candidateID: candidate.id, replay: false)
+    }
+
+    private func showPicker(url: URL, candidate: LongPressCandidate) {
+        guard presentPicker(url: url, at: candidate.location) else {
+            clickMonitor?.finishLongPress(candidateID: candidate.id, replay: true)
+            return
+        }
+        clickMonitor?.finishLongPress(candidateID: candidate.id, replay: false)
+    }
+
+    private func presentPicker(url: URL, at point: CGPoint) -> Bool {
         let config = configStore.config
         let browsers = config.enabledBrowsers.filter { browserLauncher.canResolve($0) }
         guard !browsers.isEmpty else {
             scanBrowsers()
-            clickMonitor?.finish(candidateID: candidate.id, replay: true)
-            return
+            return false
         }
 
-        clickMonitor?.finish(candidateID: candidate.id, replay: false)
         pickerController.show(
             url: url,
             browsers: browsers,
             defaultBrowserID: config.effectiveDefaultBrowser?.id,
-            at: candidate.location
+            at: point
         ) { [weak self] selectedBrowser in
             guard let self, let selectedBrowser else { return }
             self.launch(url: url, browser: selectedBrowser)
         }
+        return true
     }
 
     private func launch(url: URL, browser: BrowserEntry) {
@@ -383,7 +440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 bundleIdentifier: application.bundleIdentifier,
                 pid: application.processIdentifier
             )
-            if clickGate.isTarget(bundleIdentifier: application.bundleIdentifier) {
+            if shouldSnapshotWindows(for: application.bundleIdentifier) {
                 refreshWindows(for: application.processIdentifier)
             }
         } else {
@@ -426,9 +483,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             bundleIdentifier: application?.bundleIdentifier,
             pid: application?.processIdentifier ?? 0
         )
-        if let application, clickGate.isTarget(bundleIdentifier: application.bundleIdentifier) {
+        if let application, shouldSnapshotWindows(for: application.bundleIdentifier) {
             refreshWindows(for: application.processIdentifier)
         }
+    }
+
+    private func shouldSnapshotWindows(for bundleIdentifier: String?) -> Bool {
+        clickGate.isTarget(bundleIdentifier: bundleIdentifier)
     }
 
     private func refreshWindows(for pid: pid_t) {
@@ -594,7 +655,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             defaultBrowserID: configStore.config.effectiveDefaultBrowser?.id ?? browsers.first?.id
         )
         let size = PickerMetrics.panelSize(browsers.count)
-        let content = PickerContentView(state: state) { _ in }
+        let content = PickerContentView(
+            state: state,
+            onSelect: { _ in },
+            onCancel: {}
+        )
         content.frame = NSRect(origin: .zero, size: size)
         content.layoutSubtreeIfNeeded()
 
@@ -667,6 +732,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.informativeText = message
         alert.alertStyle = .informational
         alert.addButton(withTitle: "好")
+        let cancelButton = alert.addButton(withTitle: "取消")
+        cancelButton.keyEquivalent = "\u{1b}"
         if #available(macOS 14.0, *) {
             NSApp.activate()
         } else {
@@ -755,7 +822,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             TargetApplication(
                 displayName: "Benchmark",
                 bundleIdentifier: targetBundleID,
-                mode: .swallowAndReplay
+                mode: .observe
             )
         ])
         clickGate.setExclusions(ExclusionRules())
@@ -781,6 +848,152 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 + " total_seconds=\(String(format: "%.4f", elapsed))"
                 + " ns_per_call=\(String(format: "%.1f", nanosecondsPerCall))"
                 + " hits=\(hits)"
+        )
+        fflush(stdout)
+    }
+
+    /// 不依赖真实点击/权限的长按状态机自测。
+    private func runLongPressSelfTest() {
+        let gate = ClickGate()
+        gate.setTargets([
+            TargetApplication(
+                displayName: "SelfTest",
+                bundleIdentifier: "com.zyl.BrowserSelector.selftest",
+                mode: .observe
+            )
+        ])
+        gate.setFrontmost(
+            bundleIdentifier: "com.zyl.BrowserSelector.selftest",
+            pid: getpid()
+        )
+        gate.setWindows(
+            [WindowSnapshot(
+                bounds: CGRect(x: -10_000, y: -10_000, width: 20_000, height: 20_000),
+                title: nil
+            )],
+            for: getpid()
+        )
+
+        let monitor = ClickMonitor(gate: gate, ownPID: 0)
+        monitor.configure(
+            InteractionConfiguration(
+                longPressDuration: 0.3,
+                movementTolerance: 8
+            )
+        )
+
+        let callbackFired = DispatchSemaphore(value: 0)
+        var callbackCount = 0
+        monitor.onLongPressCandidate = { candidate in
+            callbackCount += 1
+            monitor.finishLongPress(candidateID: candidate.id, replay: false)
+            callbackFired.signal()
+        }
+
+        let point = CGPoint(x: 100, y: 100)
+        func mouseEvent(_ type: CGEventType, at location: CGPoint) -> CGEvent {
+            let event = CGEvent(
+                mouseEventSource: nil,
+                mouseType: type,
+                mouseCursorPosition: location,
+                mouseButton: .left
+            )!
+            event.setIntegerValueField(.mouseEventClickState, value: 1)
+            return event
+        }
+
+        _ = monitor.handle(
+            type: .leftMouseDown,
+            event: mouseEvent(.leftMouseDown, at: point)
+        )
+        Thread.sleep(forTimeInterval: 0.35)
+        let longPressResult = monitor.handle(
+            type: .leftMouseUp,
+            event: mouseEvent(.leftMouseUp, at: point)
+        )
+        let longPressSwallowed = longPressResult == nil
+        let longPressFired = callbackFired.wait(timeout: .now() + 1) == .success
+
+        _ = monitor.handle(
+            type: .leftMouseDown,
+            event: mouseEvent(.leftMouseDown, at: point)
+        )
+        Thread.sleep(forTimeInterval: 0.05)
+        let shortPressResult = monitor.handle(
+            type: .leftMouseUp,
+            event: mouseEvent(.leftMouseUp, at: point)
+        )
+        let shortPressPassed = shortPressResult != nil
+
+        _ = monitor.handle(
+            type: .leftMouseDown,
+            event: mouseEvent(.leftMouseDown, at: point)
+        )
+        Thread.sleep(forTimeInterval: 0.35)
+        let dragResult = monitor.handle(
+            type: .leftMouseUp,
+            event: mouseEvent(.leftMouseUp, at: CGPoint(x: point.x + 50, y: point.y))
+        )
+        let dragPassed = dragResult != nil
+
+        // 吞掉并回放：点击立即吞下，不等长按。
+        let swallowCallback = DispatchSemaphore(value: 0)
+        var swallowCount = 0
+        monitor.onCandidate = { candidate in
+            swallowCount += 1
+            monitor.finish(candidateID: candidate.id, replay: false)
+            swallowCallback.signal()
+        }
+        gate.setTargets([
+            TargetApplication(
+                displayName: "SwallowSelfTest",
+                bundleIdentifier: "com.zyl.BrowserSelector.selftest",
+                mode: .swallowAndReplay
+            )
+        ])
+        let swallowDownResult = monitor.handle(
+            type: .leftMouseDown,
+            event: mouseEvent(.leftMouseDown, at: point)
+        )
+        let swallowDownSwallowed = swallowDownResult == nil
+        _ = monitor.handle(
+            type: .leftMouseUp,
+            event: mouseEvent(.leftMouseUp, at: point)
+        )
+        let swallowFired = swallowCallback.wait(timeout: .now() + 1) == .success
+
+        // 未列入目标应用：完全旁路。
+        gate.setTargets([])
+        let unlistedDown = monitor.handle(
+            type: .leftMouseDown,
+            event: mouseEvent(.leftMouseDown, at: point)
+        )
+        let unlistedUp = monitor.handle(
+            type: .leftMouseUp,
+            event: mouseEvent(.leftMouseUp, at: point)
+        )
+        let unlistedPassed = unlistedDown != nil && unlistedUp != nil
+
+        let passed = longPressSwallowed
+            && longPressFired
+            && shortPressPassed
+            && dragPassed
+            && callbackCount == 1
+            && swallowDownSwallowed
+            && swallowFired
+            && swallowCount == 1
+            && unlistedPassed
+        print(
+            "longpress_selftest"
+                + " passed=\(passed ? 1 : 0)"
+                + " swallowed=\(longPressSwallowed ? 1 : 0)"
+                + " callback=\(longPressFired ? 1 : 0)"
+                + " short_pass=\(shortPressPassed ? 1 : 0)"
+                + " drag_pass=\(dragPassed ? 1 : 0)"
+                + " callbacks=\(callbackCount)"
+                + " swallow_down=\(swallowDownSwallowed ? 1 : 0)"
+                + " swallow_cb=\(swallowFired ? 1 : 0)"
+                + " unlisted_pass=\(unlistedPassed ? 1 : 0)"
         )
         fflush(stdout)
     }

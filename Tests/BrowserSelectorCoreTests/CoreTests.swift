@@ -174,8 +174,10 @@ final class AppConfigTests: XCTestCase {
         let config = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
         XCTAssertEqual(config.version, AppConfig.currentVersion)
         XCTAssertEqual(config.behavior.clipboardFallbackDelayMilliseconds, 50)
+        XCTAssertEqual(config.behavior.longPressDurationMilliseconds, 3_000)
         XCTAssertFalse(config.behavior.panelOnlyWithCommandModifier)
         XCTAssertEqual(config.targetApplications.count, 3)
+        XCTAssertTrue(config.targetApplications.allSatisfy { $0.mode == .observe })
         XCTAssertTrue(config.targetApplications.contains { $0.bundleIdentifier == "com.tencent.xinWeChat" })
     }
 
@@ -188,9 +190,37 @@ final class AppConfigTests: XCTestCase {
         """
         let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
         XCTAssertEqual(config.behavior.clipboardFallbackDelayMilliseconds, 1_000)
-        XCTAssertEqual(config.targetApplications.first?.mode, .swallowAndReplay)
+        XCTAssertEqual(config.targetApplications.first?.mode, .observe)
         XCTAssertEqual(config.targetApplications.first?.isEnabled, true)
         XCTAssertEqual(config.targetApplications.first?.displayName, "")
+    }
+
+    func testLongPressDurationIsClamped() throws {
+        let tooShort = try JSONDecoder().decode(
+            BehaviorSettings.self,
+            from: Data(#"{"longPressDurationMilliseconds": 10}"#.utf8)
+        )
+        XCTAssertEqual(tooShort.longPressDurationMilliseconds, 500)
+
+        let tooLong = try JSONDecoder().decode(
+            BehaviorSettings.self,
+            from: Data(#"{"longPressDurationMilliseconds": 99999}"#.utf8)
+        )
+        XCTAssertEqual(tooLong.longPressDurationMilliseconds, 10_000)
+    }
+
+    func testLongPressDurationSecondsConversion() {
+        var behavior = BehaviorSettings()
+        XCTAssertEqual(behavior.longPressDurationSeconds, 3, accuracy: 0.001)
+
+        behavior.longPressDurationSeconds = 1.5
+        XCTAssertEqual(behavior.longPressDurationMilliseconds, 1_500)
+
+        behavior.longPressDurationSeconds = 0.1
+        XCTAssertEqual(behavior.longPressDurationMilliseconds, 500)
+
+        behavior.longPressDurationSeconds = 20
+        XCTAssertEqual(behavior.longPressDurationMilliseconds, 10_000)
     }
 
     func testRoundTrip() throws {
@@ -365,5 +395,57 @@ final class ConfigStoreTests: XCTestCase {
 
         store.update { $0.defaultBrowserID = "missing" }
         XCTAssertEqual(changes, 1)
+    }
+
+    func testDirectSaveNotifiesAndAppliesImmediately() {
+        let url = directory.appendingPathComponent("config.json")
+        let store = ConfigStore(fileURL: url)
+
+        var observedDelay: Int?
+        store.onChange = { config in
+            observedDelay = config.behavior.longPressDurationMilliseconds
+        }
+
+        var updated = store.config
+        updated.behavior.longPressDurationSeconds = 2
+        store.save(updated)
+
+        XCTAssertEqual(observedDelay, 2_000)
+        XCTAssertEqual(store.config.behavior.longPressDurationMilliseconds, 2_000)
+
+        let reloaded = ConfigStore(fileURL: url)
+        XCTAssertEqual(reloaded.config.behavior.longPressDurationMilliseconds, 2_000)
+    }
+
+    func testMigratesVersion1DefaultsToObserveAndLongPress() throws {
+        let url = directory.appendingPathComponent("config.json")
+        let json = """
+        {
+          "version": 1,
+          "behavior": {
+            "panelOnlyWithCommandModifier": false,
+            "clipboardFallbackDelayMilliseconds": 50
+          },
+          "targetApplications": [
+            {
+              "displayName": "钉钉",
+              "bundleIdentifier": "com.example.ding",
+              "mode": "swallowAndReplay",
+              "isEnabled": true
+            }
+          ],
+          "browsers": []
+        }
+        """
+        try Data(json.utf8).write(to: url)
+
+        let store = ConfigStore(fileURL: url)
+        XCTAssertEqual(store.config.version, 2)
+        XCTAssertEqual(store.config.behavior.longPressDurationMilliseconds, 3_000)
+        XCTAssertEqual(store.config.targetApplications.first?.mode, .observe)
+
+        let reloaded = ConfigStore(fileURL: url)
+        XCTAssertEqual(reloaded.config.version, 2)
+        XCTAssertEqual(reloaded.config.targetApplications.first?.mode, .observe)
     }
 }

@@ -38,6 +38,19 @@ public final class ConfigStore {
             let data = try Data(contentsOf: fileURL)
             var decoded = try JSONDecoder().decode(AppConfig.self, from: data)
             decoded.sanitize()
+
+            // v1 的默认目标应用是 swallowAndReplay；v2 改为所有应用默认旁路 + 长按触发。
+            if decoded.version < 2 {
+                for index in decoded.targetApplications.indices
+                where decoded.targetApplications[index].mode == .swallowAndReplay {
+                    decoded.targetApplications[index].mode = .observe
+                }
+                decoded.version = AppConfig.currentVersion
+                config = decoded
+                save()
+                return
+            }
+
             config = decoded
         } catch {
             archiveBrokenConfig()
@@ -48,10 +61,18 @@ public final class ConfigStore {
 
     @discardableResult
     public func save(_ newConfig: AppConfig? = nil) -> Bool {
+        let previous = config
         if let newConfig {
             var value = newConfig
             value.sanitize()
             config = value
+        }
+        let changed = config != previous
+
+        defer {
+            if changed {
+                onChange?(config)
+            }
         }
 
         do {
@@ -74,9 +95,7 @@ public final class ConfigStore {
         mutate(&updated)
         updated.sanitize()
         guard updated != config else { return }
-        config = updated
-        save()
-        onChange?(config)
+        save(updated)
     }
 
     private func archiveBrokenConfig() {

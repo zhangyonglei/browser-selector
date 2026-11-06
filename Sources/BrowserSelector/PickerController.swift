@@ -50,13 +50,13 @@ final class PickerPanel: NSPanel {
 /// 面板按需创建，关闭时立即释放内容视图，闲置状态不保留视图树。
 final class PickerController {
     private let iconProvider: BrowserIconProvider
+    private let hotKeys = PanelHotKeyManager()
 
     private var panel: PickerPanel?
     private var state: PickerState?
     private var contentView: PickerContentView?
     private var keyMonitor: Any?
     private var globalMonitor: Any?
-    private var previousApp: NSRunningApplication?
     private var completion: ((BrowserEntry?) -> Void)?
     private var didFinish = false
 
@@ -96,7 +96,6 @@ final class PickerController {
 
         self.completion = completion
         self.didFinish = false
-        self.previousApp = NSWorkspace.shared.frontmostApplication
 
         var icons: [String: NSImage] = [:]
         for browser in browsers {
@@ -115,17 +114,26 @@ final class PickerController {
 
         let size = PickerMetrics.panelSize(browsers.count)
         let panel = PickerPanel(size: size)
-        let contentView = PickerContentView(state: state) { [weak self] browser in
-            self?.dismiss(selecting: browser)
-        }
+        let contentView = PickerContentView(
+            state: state,
+            onSelect: { [weak self] browser in
+                self?.dismiss(selecting: browser)
+            },
+            onCancel: { [weak self] in
+                self?.dismiss(selecting: nil)
+            }
+        )
         self.contentView = contentView
         panel.contentView = contentView
         panel.setFrame(frame(for: size, near: point), display: false)
 
         self.panel = panel
         installMonitors()
-        activateApp()
-        panel.makeKeyAndOrderFront(nil)
+        hotKeys.activate { [weak self] command in
+            self?.handleKeyCommand(command) ?? false
+        }
+        // HUD 面板不抢焦点；键盘通过面板生命周期内的 Carbon 热键转发。
+        panel.orderFrontRegardless()
         onVisibilityChanged?(true)
     }
 
@@ -137,6 +145,7 @@ final class PickerController {
         completion = nil
 
         removeMonitors()
+        hotKeys.deactivate()
         panel?.orderOut(nil)
         panel?.contentView = nil
         panel = nil
@@ -144,7 +153,6 @@ final class PickerController {
         state = nil
         onVisibilityChanged?(false)
 
-        restoreFocus()
         callback?(browser)
 
         // 面板关闭后把 malloc 空闲页还给系统，避免 footprint 停留在面板显示时的高位。
@@ -157,59 +165,75 @@ final class PickerController {
         guard panel != nil else { return }
         didFinish = true
         removeMonitors()
+        hotKeys.deactivate()
         panel?.orderOut(nil)
         panel?.contentView = nil
         panel = nil
         contentView = nil
         state = nil
         completion = nil
-        previousApp = nil
         onVisibilityChanged?(false)
+    }
+
+    @discardableResult
+    func handleKeyCommand(_ command: PanelKeyCommand) -> Bool {
+        guard panel != nil, !didFinish, let state else { return false }
+
+        switch command {
+        case .cancel:
+            dismiss(selecting: nil)
+        case .previous:
+            state.move(-1)
+            contentView?.refreshSelection(scrollToVisible: true)
+        case .next:
+            state.move(1)
+            contentView?.refreshSelection(scrollToVisible: true)
+        case .confirm:
+            guard let browser = state.selectedBrowser else { return false }
+            dismiss(selecting: browser)
+        case .digit(let number):
+            guard number >= 1, number <= min(9, state.browsers.count) else { return false }
+            state.select(number - 1)
+            contentView?.refreshSelection(scrollToVisible: true)
+            if let browser = state.selectedBrowser {
+                dismiss(selecting: browser)
+            }
+        }
+        return true
     }
 
     private func installMonitors() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.panel?.isVisible == true, let state = self.state else {
+            guard let self, self.panel != nil, let command = Self.keyCommand(from: event) else {
                 return event
             }
-
-            switch event.keyCode {
-            case 53: // esc
-                self.dismiss(selecting: nil)
-                return nil
-            case 125: // ↓
-                state.move(1)
-                self.contentView?.refreshSelection(scrollToVisible: true)
-                return nil
-            case 126: // ↑
-                state.move(-1)
-                self.contentView?.refreshSelection(scrollToVisible: true)
-                return nil
-            case 36, 76: // return / keypad enter
-                if let browser = state.selectedBrowser {
-                    self.dismiss(selecting: browser)
-                }
-                return nil
-            default:
-                if let characters = event.charactersIgnoringModifiers,
-                   let number = Int(characters),
-                   number >= 1,
-                   number <= min(9, state.browsers.count) {
-                    state.select(number - 1)
-                    self.contentView?.refreshSelection(scrollToVisible: true)
-                    if let browser = state.selectedBrowser {
-                        self.dismiss(selecting: browser)
-                    }
-                    return nil
-                }
-                return event
-            }
+            return self.handleKeyCommand(command) ? nil : event
         }
 
         globalMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         ) { [weak self] _ in
             self?.dismiss(selecting: nil)
+        }
+    }
+
+    private static func keyCommand(from event: NSEvent) -> PanelKeyCommand? {
+        switch event.keyCode {
+        case 53: // esc
+            return .cancel
+        case 125: // ↓
+            return .next
+        case 126: // ↑
+            return .previous
+        case 36, 76: // return / keypad enter
+            return .confirm
+        default:
+            guard let characters = event.charactersIgnoringModifiers,
+                  let number = Int(characters),
+                  (1...9).contains(number) else {
+                return nil
+            }
+            return .digit(number)
         }
     }
 
@@ -221,23 +245,6 @@ final class PickerController {
         if let globalMonitor {
             NSEvent.removeMonitor(globalMonitor)
             self.globalMonitor = nil
-        }
-    }
-
-    private func restoreFocus() {
-        defer { previousApp = nil }
-        guard let previousApp,
-              previousApp.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
-            return
-        }
-        _ = previousApp.activate(options: [])
-    }
-
-    private func activateApp() {
-        if #available(macOS 14.0, *) {
-            NSApp.activate()
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
         }
     }
 

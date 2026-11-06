@@ -18,7 +18,8 @@ let package = Package(
         .executableTarget(
             name: "BrowserSelector",
             dependencies: ["BrowserSelectorCore"],
-            path: "Sources/BrowserSelector"
+            path: "Sources/BrowserSelector",
+            linkerSettings: [.linkedFramework("Carbon")]
         ),
         .testTarget(
             name: "BrowserSelectorCoreTests",

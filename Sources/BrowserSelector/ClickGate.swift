@@ -118,6 +118,18 @@ final class ClickGate {
               let target = targets[bundleIdentifier], target.isEnabled else {
             return nil
         }
+        return decisionLocked(
+            point: point,
+            bundleIdentifier: bundleIdentifier,
+            mode: target.mode
+        )
+    }
+
+    private func decisionLocked(
+        point: CGPoint,
+        bundleIdentifier: String,
+        mode: InterceptionMode
+    ) -> ClickDecision? {
         guard !exclusions.excludes(bundleIdentifier: bundleIdentifier) else { return nil }
 
         // 快照超过 5 秒就跳过矩形命中判断，避免窗口移动后漏掉点击。
@@ -133,6 +145,6 @@ final class ClickGate {
             }
         }
 
-        return ClickDecision(bundleIdentifier: bundleIdentifier, pid: frontmostPID, mode: target.mode)
+        return ClickDecision(bundleIdentifier: bundleIdentifier, pid: frontmostPID, mode: mode)
     }
 }

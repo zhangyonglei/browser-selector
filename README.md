@@ -1,29 +1,28 @@
 # 浏览器选择器（BrowserSelector）
 
-macOS 菜单栏常驻工具：在钉钉 / 微信 / QQ 里点击链接时，在光标位置弹出浏览器选择面板，用你指定的浏览器打开。
+macOS 菜单栏常驻工具：在目标应用（默认钉钉 / 微信 / QQ）里按应用配置触发，在光标位置弹出浏览器选择面板，用你指定的浏览器打开。未列入目标应用的应用完全旁路，短按也不会影响原有行为。
 
 ![浏览器选择面板](docs/panel.png)
 
 - Swift + AppKit（EventTap / Accessibility / Launch Services）
 - 无网络请求、无后台轮询、无日志落盘
 - 空闲常驻 footprint ≈ 14MB，空闲 CPU ≈ 0.01%
-- 28 个 Core 单元测试 + Xcode 工程 + 一键打包脚本
+- 32 个 Core 单元测试 + Xcode 工程 + 一键打包脚本
 
 性能数据与测量方法见 [PERFORMANCE.md](PERFORMANCE.md)。
 
 ## 功能
 
-- **全局点击拦截**：`CGEventTap` 只监听左键；回调内仅做缓存态判断，AX / 剪贴板 / 浏览器启动全部在后台队列。
-- **按应用选择策略**：
-  - `吞掉并回放`：先拦下点击，解析成功弹面板；不是链接或解析失败时把原点击回放给应用，不会双开。
-  - `旁路观察`：点击照常透传，只在解析到链接时弹面板（应用可能同时用默认浏览器打开）。
-  - 不在目标列表里的应用完全不拦截。
+- **目标应用配置优先**：每个应用独立选择触发方式，未列出的应用完全旁路。
+  - `旁路观察（长按）`：默认。短按/拖拽/双击原样透传；按住超过长按阈值（默认 3 秒，可调 0.5–10 秒）且移动很小时，释放时才吞掉 mouseUp、解析链接并弹面板。
+  - `吞掉并回放（点击）`：点击立即吞掉并按规则/面板处理；不是链接或解析失败时把原点击回放给应用，不会双开。
+- **长按阈值**：仅对「旁路观察（长按）」的应用生效；「吞掉并回放（点击）」应用点击即处理，不等长按。
 - **链接提取**：AX 祖先链找 `AXURL` / `AXLinkURL` → 选中文本 → 剪贴板兜底（仅当 AX 完全不可用时，默认延迟 50ms，可配置）。
-- **浏览器面板**：纯 AppKit 绘制，图标 / 默认标记 / `1…9` 快捷键 / ↑↓ / ↩ / esc；关闭即释放视图。
+- **浏览器面板**：纯 AppKit 绘制，不抢焦点；图标 / 默认标记 / `1…9` 快捷键 / ↑↓ / ↩ / esc，右下角有可点击的「取消」。面板显示期间临时注册 Carbon 全局热键，关闭立即注销，不需要输入监控权限。
 - **浏览器启动**：`NSWorkspace` 精准指定 App；支持每个浏览器独立的参数模板，`{url}` 占位符，例如 `--incognito --user-data-dir=/tmp/profile {url}`。
 - **未注册浏览器**：设置页可手动添加便携版 / 自定义路径的 `.app`，填路径或 Bundle ID 其一即可。
-- **域名路由**：正则匹配 host 或完整 URL，命中后跳过面板直接打开；规则按顺序执行。
-- **修饰键**：可选「仅 ⌘+Click 弹面板」，普通点击走规则 / 默认浏览器。
+- **域名路由**：正则匹配 host 或完整 URL，命中后跳过面板直接打开；规则按顺序执行（仅「吞掉并回放（点击）」模式）。
+- **修饰键**：可选「仅 ⌘+Click 弹面板」，普通点击走规则 / 默认浏览器（仅「吞掉并回放（点击）」模式）。
 - **排除规则**：按 Bundle ID 或窗口标题关键字跳过拦截（标题需要屏幕录制权限）。
 - **权限引导**：菜单与设置页实时显示辅助功能 / 屏幕录制状态，支持重新检测并启动监听。
 
@@ -46,10 +45,11 @@ Sources/BrowserSelector/         AppKit 常驻进程
   BrowserCatalog.swift           Launch Services 发现 + 浏览器识别
   BrowserLauncher.swift          NSWorkspace 启动与参数注入
   PickerView.swift / PickerController.swift   AppKit 选择面板
+  PanelHotKeyManager.swift       面板期间的 Carbon 全局热键（esc / ↑↓ / ↩ / 1–9）
   Settings*.swift                设置窗口（SwiftUI，按需加载）
   Diagnostics.swift              RSS / footprint / CPU 采样
 
-Tests/BrowserSelectorCoreTests/  28 个单元测试
+Tests/BrowserSelectorCoreTests/  32 个单元测试
 scripts/build-app.sh             release 构建 + .app 打包 + ad-hoc 签名
 scripts/benchmark.sh             空闲性能基准
 project.yml                      XcodeGen 工程描述
@@ -68,7 +68,7 @@ open build/BrowserSelector.app
 
 1. 系统会提示授权辅助功能；到 **系统设置 → 隐私与安全性 → 辅助功能** 勾选 `BrowserSelector`。
 2. 菜单栏图标 → **重新检测权限并启动**。
-3. 打开钉钉 / 微信 / QQ，左键点击聊天里的链接。
+3. 打开钉钉 / 微信 / QQ，**按住左键约 3 秒后松开**链接。
 
 > `scripts/build-app.sh` 使用 ad-hoc 签名。每次重新签名后 TCC 可能要求重新授权；想避免重复授权，请在 Xcode 中换成固定开发团队签名，或使用固定的自签名证书。
 
@@ -98,6 +98,7 @@ swift build -c release
 ```json
 {
   "behavior": {
+    "longPressDurationMilliseconds": 3000,
     "panelOnlyWithCommandModifier": false,
     "clipboardFallbackDelayMilliseconds": 50
   },
@@ -105,7 +106,7 @@ swift build -c release
     {
       "displayName": "钉钉",
       "bundleIdentifier": "5ZSL2CJU2T.com.dingtalk.mac",
-      "mode": "swallowAndReplay",
+      "mode": "observe",
       "isEnabled": true
     }
   ],
@@ -138,6 +139,9 @@ swift build -c release
 
 说明：
 
+- `targetApplications[].mode`：`observe`（旁路观察，长按触发）或 `swallowAndReplay`（吞掉并回放，点击即触发）。未列出的应用完全旁路。
+- `longPressDurationMilliseconds`：长按阈值，默认 `3000`；设置页以秒展示，可调 0.5–10 秒，**仅对 `observe` 应用生效**。
+- 旧版本的 `behavior.triggerMode` 字段会被忽略；触发方式现在由每个目标应用的 `mode` 决定。
 - `pattern` 是 ICU 正则，先匹配 host，再匹配完整 URL；JSON 中反斜杠要写成 `\\`。
 - `argumentsTemplate` 为空时走 `NSWorkspace.open([url], withApplicationAt:)`；非空时把模板解析成 argv 并注入 URL。模板没有 `{url}` 时，URL 自动追加到末尾。
 - 参数模板由用户按浏览器实际支持的参数填写（例如 Safari 不接受 `--new-window` 这类 Chrome 参数）。
@@ -148,20 +152,23 @@ swift build -c release
 
 ```
 左键按下
-  └─ EventTap 回调（缓存判定，约 0.1µs）
-       ├─ 非目标应用 / 被排除 / 面板已显示 → 原事件透传
-       └─ 命中目标应用
-            ├─ 吞掉并回放：先拦下点击（以及随后的 mouseUp）
-            └─ 后台解析：AX 探测 → 选中文本 → 剪贴板兜底
-                 ├─ 解析失败 → finish(replay: true)，把点击原样回放给目标应用
-                 ├─ 命中域名规则 → 指定浏览器打开
-                 ├─ 仅 ⌘ 弹面板模式 + 普通点击 → 默认浏览器
-                 └─ 其他 → 面板选择 → NSWorkspace 启动
+  └─ EventTap 回调（约 0.1µs）：查目标应用与模式（全部为缓存态判断）
+       ├─ 未列入目标应用 / 被禁用 / 命中排除规则 → 完全透传
+       ├─ 吞掉并回放（点击）→ 立即吞掉 mouseDown → 后台解析
+       │     ├─ 失败 → 回放原点击给应用
+       │     └─ 成功 → 域名规则 / 默认浏览器 / 面板
+       └─ 旁路观察（长按）→ 只记录坐标/时间，事件透传
+            └─ 左键释放
+                 ├─ 按住 < 长按阈值 或 移动 > 8pt → 透传，应用照常处理
+                 └─ 按住 ≥ 阈值 → 吞掉 mouseUp
+                      └─ 后台解析：AX → 选中文本 → 剪贴板兜底
+                           ├─ 失败 → 回放 mouseUp 给应用
+                           └─ 成功 → 选择面板 → NSWorkspace 启动
 ```
 
 性能约束落实位置：
 
-- 回调内不调用 `NSWorkspace`、AX、窗口枚举、磁盘/网络。
+- 回调内不调用 `NSWorkspace`、AX、窗口枚举、磁盘/网络；短按只写一个很小的状态结构。
 - 面板首次需要时创建，关闭时 `contentView = nil` 并释放。
 - 浏览器列表只在首次启动或手动刷新时扫描，结果缓存进配置。
 - 发布构建不写日志（`Log` 仅在 `DEBUG` 输出）。
@@ -179,6 +186,9 @@ swift build -c release
 # 点击闸门微基准（ns/call）
 .build/release/BrowserSelector --benchmark-click
 
+# 长按阈值/短按/拖拽状态机自测
+.build/release/BrowserSelector --test-longpress
+
 # 离屏渲染面板 PNG（不需要屏幕录制权限）
 .build/release/BrowserSelector --render-preview /tmp/panel.png
 
@@ -186,16 +196,19 @@ swift build -c release
 .build/release/BrowserSelector --preview
 ```
 
-菜单里还有 **测试光标处链接**（读取光标处 AX/剪贴板结果）和 **预览选择面板**。
+菜单里还有 **测试光标处链接**（读取光标处 AX/剪贴板结果，结果窗口支持「取消」/Esc）和 **预览选择面板**。
 
 基准模式会在结束时自行退出，不会注册辅助功能授权弹窗。
 
 ## 已知限制
 
-- **首次点击非前台的聊天窗口**：第一次点击主要用于激活窗口，EventTap 的前台应用缓存此时可能尚未更新，因此不会拦截；窗口激活后的点击正常。
-- **在目标窗口内拖拽选择文本**：`吞掉并回放` 模式下左键按下会被拦截，拖拽选择会失效；需要频繁选择文本时，可把该应用改成 `旁路观察`。
-- **剪贴板兜底只在 AX 完全不可用时启用**。AX 可读但没有 URL 时直接结束，避免每次普通点击都等待 50ms。若旧版微信/QQ 点击链接时不会把链接复制到剪贴板，兜底也无法生效，此时点击会被回放给应用（由应用自己打开）。
+- **首次点击非前台/长按未命中**：EventTap 的前台应用缓存依赖窗口激活；在应用尚未成为前台时立刻长按，可能不会触发，先点一下窗口再长按即可。
+- **未列入目标应用的应用不会触发**：如果希望在某个应用里使用长按选浏览器，请在「目标应用」里添加它并选择「旁路观察（长按）」。
+- **长按触发会吞掉 mouseUp**：极少数应用可能保留“按下”视觉状态，切回应用后点一次即可恢复；这是为了阻止应用自己打开链接、避免双开。
+- **「吞掉并回放（点击）」模式下的拖拽**：会拦下目标窗口内的左键按下，拖拽选择文本会失效；改用「旁路观察（长按）」即可保持短按/拖拽透传。
+- **剪贴板兜底只在 AX 完全不可用时启用**。AX 可读但没有 URL 时直接结束，避免每次普通点击都等待 50ms。若旧版微信/QQ 点击链接时不会把链接复制到剪贴板，兜底也无法生效，此时释放事件会被回放给应用（由应用自己打开）。
 - **窗口标题排除**依赖屏幕录制权限；未授权时仅按 Bundle ID 排除。
+- **面板热键会临时占用** Esc / 数字 / 方向键 / 回车；若与常驻热键冲突，个别键可能注册失败，鼠标点击始终可用。
 - **未实现开机自启**（可后续接 `SMAppService`）。
 - **ad-hoc 签名**每次重建可能重置辅助功能授权；开发期建议固定签名。
 - 面板显示后 footprint 会高于 15MB（AppKit 窗口基线所致，见 PERFORMANCE.md）；空闲常驻满足 ≤15MB。

@@ -13,6 +13,19 @@ struct ClickCandidate {
     let swallowed: Bool
 }
 
+struct LongPressCandidate {
+    let id: UInt64
+    let pid: pid_t
+    let location: CGPoint
+    let flags: CGEventFlags
+    let clickState: Int64
+}
+
+struct InteractionConfiguration {
+    var longPressDuration: TimeInterval = 3
+    var movementTolerance: CGFloat = 8
+}
+
 private let clickEventTapCallback: CGEventTapCallBack = { _, type, event, refcon in
     guard let refcon else { return Unmanaged.passUnretained(event) }
     let monitor = Unmanaged<ClickMonitor>.fromOpaque(refcon).takeUnretainedValue()
@@ -21,9 +34,9 @@ private let clickEventTapCallback: CGEventTapCallBack = { _, type, event, refcon
 
 /// 全局左键监听。
 ///
-/// `defaultTap` 允许吞掉事件：目标应用配置为 `swallowAndReplay` 时先拦下左键，
-/// 后台解析 URL；解析失败再把点击回放给原进程。回调本身只做缓存态判断与一次
-/// 队列投递，不做 AX、窗口枚举或任何磁盘/网络操作。
+/// 默认的 `longPress` 模式不拦截 mouseDown，只记下按下位置与时间；mouseUp 时
+/// 若按住超过阈值且几乎没移动，才吞掉这次 release 并进入链接解析，避免普通
+/// 点击、拖拽被影响。旧 `click` 模式保留原有的吞掉/回放逻辑。
 final class ClickMonitor {
     private static let replayMagic: Int64 = 0x4253_4C43_0001
 
@@ -39,27 +52,47 @@ final class ClickMonitor {
         var upSwallowed: Bool = false
     }
 
+    private struct PressState {
+        let id: UInt64
+        let point: CGPoint
+        let pid: pid_t
+        let flags: CGEventFlags
+        let clickState: Int64
+        let startedAt: CFAbsoluteTime
+    }
+
     private let gate: ClickGate
     private let resolutionQueue = DispatchQueue(
         label: "com.zyl.BrowserSelector.click-resolution",
         qos: .userInteractive
     )
-    private let pendingLock = NSLock()
+    private let stateLock = NSLock()
     private var pending: PendingState?
+    private var pressState: PressState?
+    private var pendingLongPress: PressState?
+    private var interaction = InteractionConfiguration()
     private var nextIdentifier: UInt64 = 0
-    private let ownPID = ProcessInfo.processInfo.processIdentifier
+    private let ownPID: pid_t
 
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
 
     var onCandidate: ((ClickCandidate) -> Void)?
+    var onLongPressCandidate: ((LongPressCandidate) -> Void)?
     var onOutsideClickWhilePanelVisible: (() -> Void)?
 
-    init(gate: ClickGate) {
+    init(gate: ClickGate, ownPID: pid_t? = nil) {
         self.gate = gate
+        self.ownPID = ownPID ?? ProcessInfo.processInfo.processIdentifier
     }
 
     var isRunning: Bool { tap != nil }
+
+    func configure(_ configuration: InteractionConfiguration) {
+        stateLock.lock()
+        interaction = configuration
+        stateLock.unlock()
+    }
 
     func start() -> Bool {
         guard tap == nil else { return true }
@@ -102,20 +135,22 @@ final class ClickMonitor {
         tap = nil
         runLoopSource = nil
 
-        pendingLock.lock()
+        stateLock.lock()
         pending = nil
-        pendingLock.unlock()
+        pressState = nil
+        pendingLongPress = nil
+        stateLock.unlock()
     }
 
-    /// 协调器处理完一次点击后调用。解析失败时按原样回放被吞掉的点击。
+    /// 旧「点击触发」模式：协调器处理完一次点击后调用；解析失败时回放被吞掉的点击。
     func finish(candidateID: UInt64, replay: Bool) {
-        pendingLock.lock()
+        stateLock.lock()
         guard let state = pending, state.id == candidateID else {
-            pendingLock.unlock()
+            stateLock.unlock()
             return
         }
         pending = nil
-        pendingLock.unlock()
+        stateLock.unlock()
 
         guard replay, state.swallowed else { return }
 
@@ -128,6 +163,25 @@ final class ClickMonitor {
             flags: state.flags,
             clickState: state.clickState,
             includeMouseUp: state.upSwallowed
+        )
+    }
+
+    /// 长按模式：面板已展示（replay=false）或解析失败（replay=true，把 release 还给应用）。
+    func finishLongPress(candidateID: UInt64, replay: Bool) {
+        stateLock.lock()
+        guard let state = pendingLongPress, state.id == candidateID else {
+            stateLock.unlock()
+            return
+        }
+        pendingLongPress = nil
+        stateLock.unlock()
+
+        guard replay else { return }
+        postMouseUp(
+            point: state.point,
+            pid: state.pid,
+            flags: state.flags,
+            clickState: state.clickState
         )
     }
 
@@ -156,7 +210,7 @@ final class ClickMonitor {
             return passThrough
         }
         if gate.isPanelVisible {
-            // 面板内部点击交给 SwiftUI；面板外点击关闭面板并透传。
+            // 面板内部点击交给 AppKit 面板；面板外点击关闭面板并透传。
             if gate.panelContains(event.location) {
                 return passThrough
             }
@@ -166,10 +220,28 @@ final class ClickMonitor {
 
         let point = event.location
         guard let decision = gate.evaluate(point: point, flags: event.flags) else {
+            // 未列入目标应用 / 被禁用 / 命中排除规则：完全旁路。
             return passThrough
         }
 
         let identifier = allocateIdentifier()
+
+        if decision.mode == .observe {
+            let press = PressState(
+                id: identifier,
+                point: point,
+                pid: decision.pid,
+                flags: event.flags,
+                clickState: event.getIntegerValueField(.mouseEventClickState),
+                startedAt: CFAbsoluteTimeGetCurrent()
+            )
+            stateLock.lock()
+            pressState = press
+            stateLock.unlock()
+            return passThrough
+        }
+
+        // 吞掉并回放：点击即处理。
         let candidate = ClickCandidate(
             id: identifier,
             bundleIdentifier: decision.bundleIdentifier,
@@ -178,28 +250,26 @@ final class ClickMonitor {
             flags: event.flags,
             clickState: event.getIntegerValueField(.mouseEventClickState),
             mode: decision.mode,
-            swallowed: decision.mode == .swallowAndReplay
+            swallowed: true
         )
 
-        if candidate.swallowed {
-            pendingLock.lock()
-            pending = PendingState(
-                id: identifier,
-                point: point,
-                pid: decision.pid,
-                flags: event.flags,
-                clickState: candidate.clickState,
-                swallowed: true,
-                createdAt: CFAbsoluteTimeGetCurrent()
-            )
-            pendingLock.unlock()
-        }
+        stateLock.lock()
+        pending = PendingState(
+            id: identifier,
+            point: point,
+            pid: decision.pid,
+            flags: event.flags,
+            clickState: candidate.clickState,
+            swallowed: true,
+            createdAt: CFAbsoluteTimeGetCurrent()
+        )
+        stateLock.unlock()
 
         resolutionQueue.async { [weak self] in
             self?.onCandidate?(candidate)
         }
 
-        return candidate.swallowed ? nil : passThrough
+        return nil
     }
 
     private func handleMouseUp(event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -208,9 +278,26 @@ final class ClickMonitor {
             return passThrough
         }
 
-        pendingLock.lock()
+        stateLock.lock()
+        let hasPendingClick = pending != nil
+        stateLock.unlock()
+
+        if hasPendingClick {
+            return handleSwallowMouseUp(event: event)
+        }
+
+        return handleLongPressMouseUp(
+            event: event,
+            configuration: currentConfiguration()
+        )
+    }
+
+    private func handleSwallowMouseUp(event: CGEvent) -> Unmanaged<CGEvent>? {
+        let passThrough = Unmanaged.passUnretained(event)
+
+        stateLock.lock()
         guard var state = pending else {
-            pendingLock.unlock()
+            stateLock.unlock()
             return passThrough
         }
 
@@ -222,16 +309,60 @@ final class ClickMonitor {
             state.upSwallowed = true
         }
         pending = state
-        pendingLock.unlock()
+        stateLock.unlock()
 
         return shouldSwallow ? nil : passThrough
     }
 
+    private func handleLongPressMouseUp(
+        event: CGEvent,
+        configuration: InteractionConfiguration
+    ) -> Unmanaged<CGEvent>? {
+        let passThrough = Unmanaged.passUnretained(event)
+
+        stateLock.lock()
+        guard let state = pressState else {
+            stateLock.unlock()
+            return passThrough
+        }
+        pressState = nil
+        stateLock.unlock()
+
+        let elapsed = CFAbsoluteTimeGetCurrent() - state.startedAt
+        let distance = hypot(event.location.x - state.point.x, event.location.y - state.point.y)
+        guard elapsed >= configuration.longPressDuration,
+              distance <= configuration.movementTolerance else {
+            return passThrough
+        }
+
+        stateLock.lock()
+        pendingLongPress = state
+        stateLock.unlock()
+
+        let candidate = LongPressCandidate(
+            id: state.id,
+            pid: state.pid,
+            location: state.point,
+            flags: state.flags,
+            clickState: state.clickState
+        )
+        resolutionQueue.async { [weak self] in
+            self?.onLongPressCandidate?(candidate)
+        }
+        return nil
+    }
+
+    private func currentConfiguration() -> InteractionConfiguration {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return interaction
+    }
+
     private func allocateIdentifier() -> UInt64 {
-        pendingLock.lock()
+        stateLock.lock()
         nextIdentifier &+= 1
         let value = nextIdentifier
-        pendingLock.unlock()
+        stateLock.unlock()
         return value
     }
 
@@ -260,12 +391,22 @@ final class ClickMonitor {
         down.postToPid(pid)
 
         guard includeMouseUp else { return }
-        guard let up = CGEvent(
-            mouseEventSource: source,
-            mouseType: .leftMouseUp,
-            mouseCursorPosition: point,
-            mouseButton: .left
-        ) else { return }
+        postMouseUp(point: point, pid: pid, flags: flags, clickState: clickState)
+    }
+
+    private func postMouseUp(
+        point: CGPoint,
+        pid: pid_t,
+        flags: CGEventFlags,
+        clickState: Int64
+    ) {
+        guard let source = CGEventSource(stateID: .combinedSessionState),
+              let up = CGEvent(
+                  mouseEventSource: source,
+                  mouseType: .leftMouseUp,
+                  mouseCursorPosition: point,
+                  mouseButton: .left
+              ) else { return }
         up.flags = flags
         up.setIntegerValueField(.mouseEventClickState, value: clickState)
         up.setIntegerValueField(.eventSourceUserData, value: Self.replayMagic)

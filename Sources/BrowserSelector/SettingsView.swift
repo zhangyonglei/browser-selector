@@ -119,6 +119,23 @@ private struct GeneralSettingsView: View {
             }
 
             SettingsCard {
+                VStack(alignment: .leading, spacing: 4) {
+                    Stepper(
+                        value: longPressSecondsBinding,
+                        in: 0.5...10.0,
+                        step: 0.5
+                    ) {
+                        Text("长按阈值：\(formattedLongPressSeconds) 秒")
+                            .font(.system(size: 12))
+                    }
+                    Text("默认 3 秒，可调 0.5–10 秒。仅对目标应用中设置为「旁路观察（长按）」的应用生效；「吞掉并回放（点击）」应用点击即处理，未列出的应用完全旁路。")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            SettingsCard {
                 HStack {
                     Text("默认浏览器")
                         .font(.system(size: 12))
@@ -142,7 +159,7 @@ private struct GeneralSettingsView: View {
                     )
                     .toggleStyle(.switch)
                     .controlSize(.small)
-                    Text("关闭：普通点击直接弹面板（域名规则仍优先）；开启：普通点击走规则/默认浏览器，⌘+点击强制弹面板。")
+                    Text("仅对「吞掉并回放（点击）」模式生效：关闭时点击直接弹面板（域名规则仍优先）；开启时普通点击走规则/默认浏览器，⌘+点击强制弹面板。")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -185,6 +202,20 @@ private struct GeneralSettingsView: View {
             get: { model.config.defaultBrowserID ?? "" },
             set: { model.config.defaultBrowserID = $0.isEmpty ? nil : $0 }
         )
+    }
+
+    private var longPressSecondsBinding: Binding<Double> {
+        Binding(
+            get: { model.config.behavior.longPressDurationSeconds },
+            set: { model.config.behavior.longPressDurationSeconds = $0 }
+        )
+    }
+
+    private var formattedLongPressSeconds: String {
+        let seconds = model.config.behavior.longPressDurationSeconds
+        return seconds == seconds.rounded()
+            ? String(format: "%.0f", seconds)
+            : String(format: "%.1f", seconds)
     }
 
     private func permissionRow(
@@ -483,13 +514,13 @@ private struct TargetsSettingsView: View {
     @ObservedObject var model: SettingsModel
     @State private var newName = ""
     @State private var newBundleIdentifier = ""
-    @State private var newMode: InterceptionMode = .swallowAndReplay
+    @State private var newMode: InterceptionMode = .observe
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             settingsSectionHeader(
                 "目标应用",
-                "只有列表中的应用会被拦截；不在列表中的应用完全旁路，不受影响。"
+                "「旁路观察（长按）」：短按透传，按住超过长按阈值才弹面板；「吞掉并回放（点击）」：点击立即处理。未列出的应用完全旁路。"
             )
 
             SettingsCard {
@@ -604,7 +635,7 @@ private struct RoutingSettingsView: View {
         VStack(alignment: .leading, spacing: 16) {
             settingsSectionHeader(
                 "域名路由",
-                "命中的链接跳过选择面板，直接用指定浏览器打开。规则按顺序匹配，支持正则。"
+                "命中后跳过选择面板，直接用指定浏览器打开。规则按顺序匹配，支持正则；仅对「吞掉并回放（点击）」模式生效。"
             )
 
             SettingsCard {

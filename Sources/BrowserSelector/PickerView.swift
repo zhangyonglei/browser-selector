@@ -64,6 +64,7 @@ final class PickerState {
 final class PickerContentView: NSVisualEffectView {
     private let pickerState: PickerState
     private let onSelect: (BrowserEntry) -> Void
+    private let onCancel: () -> Void
     private let rows: [BrowserRowView]
 
     private let scrollView = NSScrollView()
@@ -71,14 +72,20 @@ final class PickerContentView: NSVisualEffectView {
     private let hostLabel = NSTextField(labelWithString: "")
     private let urlLabel = NSTextField(labelWithString: "")
     private let hintLabel = NSTextField(labelWithString: "↑↓ 选择 · ↩ 打开 · esc 取消")
+    private let cancelButton = NSButton(title: "取消", target: nil, action: nil)
     private let topDivider = NSBox()
     private let bottomDivider = NSBox()
 
     override var isFlipped: Bool { true }
 
-    init(state: PickerState, onSelect: @escaping (BrowserEntry) -> Void) {
+    init(
+        state: PickerState,
+        onSelect: @escaping (BrowserEntry) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
         self.pickerState = state
         self.onSelect = onSelect
+        self.onCancel = onCancel
         self.rows = state.browsers.enumerated().map { index, browser in
             let row = BrowserRowView()
             row.configure(
@@ -132,10 +139,19 @@ final class PickerContentView: NSVisualEffectView {
         }
 
         bottomDivider.frame = NSRect(x: 0, y: listTop + listHeight, width: width, height: 1)
+
+        cancelButton.sizeToFit()
+        let footerY = listTop + listHeight + PickerMetrics.dividerHeight + 7
+        cancelButton.frame = NSRect(
+            x: width - 14 - cancelButton.frame.width,
+            y: footerY,
+            width: cancelButton.frame.width,
+            height: 16
+        )
         hintLabel.frame = NSRect(
             x: 14,
-            y: listTop + listHeight + PickerMetrics.dividerHeight + 8,
-            width: width - 28,
+            y: footerY,
+            width: max(0, cancelButton.frame.minX - 22),
             height: 14
         )
     }
@@ -170,6 +186,13 @@ final class PickerContentView: NSVisualEffectView {
         hintLabel.textColor = .secondaryLabelColor
         hintLabel.maximumNumberOfLines = 1
 
+        cancelButton.target = self
+        cancelButton.action = #selector(cancelClicked)
+        cancelButton.isBordered = false
+        cancelButton.font = .systemFont(ofSize: 10, weight: .medium)
+        cancelButton.contentTintColor = .secondaryLabelColor
+        addSubview(cancelButton)
+
         for divider in [topDivider, bottomDivider] {
             divider.boxType = .separator
             addSubview(divider)
@@ -203,6 +226,10 @@ final class PickerContentView: NSVisualEffectView {
         addSubview(hintLabel)
 
         refreshSelection(scrollToVisible: false)
+    }
+
+    @objc private func cancelClicked() {
+        onCancel()
     }
 }
 
@@ -314,7 +341,7 @@ private final class BrowserRowView: NSView {
         }
         let area = NSTrackingArea(
             rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
             owner: self,
             userInfo: nil
         )

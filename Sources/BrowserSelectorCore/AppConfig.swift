@@ -2,26 +2,26 @@ import Foundation
 
 /// 每个目标应用的点击处理方式。
 public enum InterceptionMode: String, Codable, CaseIterable, Identifiable, Sendable {
-    /// 先吞掉点击，解析成功后弹面板；解析失败或不是链接时把原点击回放给目标应用。
-    case swallowAndReplay
-    /// 事件照常透传，只在解析到链接时弹面板。目标应用可能同时用默认浏览器打开链接。
+    /// 短按透传；按住超过长按阈值且移动很小时，释放时拦截并弹面板。
     case observe
+    /// 点击立即吞掉并按规则/面板处理，解析失败时回放原点击。
+    case swallowAndReplay
 
     public var id: String { rawValue }
 
     public var displayName: String {
         switch self {
-        case .swallowAndReplay: return "吞掉并回放"
-        case .observe: return "旁路观察"
+        case .observe: return "旁路观察（长按）"
+        case .swallowAndReplay: return "吞掉并回放（点击）"
         }
     }
 
     public var detail: String {
         switch self {
-        case .swallowAndReplay:
-            return "先吞掉点击，解析成功弹选择器，失败时把原点击回放给应用，不会出现双开。"
         case .observe:
-            return "点击照常透传给应用，仅解析到链接时弹面板。应用自身可能同时打开默认浏览器。"
+            return "短按完全透传；按住超过长按阈值且移动很小时，释放时拦截这次点击并弹出面板。"
+        case .swallowAndReplay:
+            return "点击立即吞掉，解析成功弹面板；不是链接或解析失败时把原点击回放给应用，不会双开。"
         }
     }
 }
@@ -38,7 +38,7 @@ public struct TargetApplication: Codable, Identifiable, Hashable, Sendable {
     public init(
         displayName: String,
         bundleIdentifier: String,
-        mode: InterceptionMode = .swallowAndReplay,
+        mode: InterceptionMode = .observe,
         isEnabled: Bool = true
     ) {
         self.displayName = displayName
@@ -55,7 +55,7 @@ public struct TargetApplication: Codable, Identifiable, Hashable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         displayName = try container.decodeIfPresent(String.self, forKey: .displayName) ?? ""
         bundleIdentifier = try container.decodeIfPresent(String.self, forKey: .bundleIdentifier) ?? ""
-        mode = try container.decodeIfPresent(InterceptionMode.self, forKey: .mode) ?? .swallowAndReplay
+        mode = try container.decodeIfPresent(InterceptionMode.self, forKey: .mode) ?? .observe
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
     }
 }
@@ -194,25 +194,42 @@ public struct ExclusionRules: Codable, Hashable, Sendable {
 }
 
 public struct BehaviorSettings: Codable, Hashable, Sendable {
-    /// true 时普通点击直接走规则/默认浏览器，只有 Cmd+Click 才弹选择器。
+    /// 长按阈值，仅对「旁路观察（长按）」的目标应用生效。
+    public var longPressDurationMilliseconds: Int
+    /// true 时普通点击直接走规则/默认浏览器，只有 Cmd+Click 才弹选择器（吞掉模式）。
     public var panelOnlyWithCommandModifier: Bool
     /// 剪贴板兜底从点击到读取的等待时间。
     public var clipboardFallbackDelayMilliseconds: Int
 
     public init(
+        longPressDurationMilliseconds: Int = 3_000,
         panelOnlyWithCommandModifier: Bool = false,
         clipboardFallbackDelayMilliseconds: Int = 50
     ) {
+        let longPress = min(max(longPressDurationMilliseconds, 500), 10_000)
+        self.longPressDurationMilliseconds = longPress
         self.panelOnlyWithCommandModifier = panelOnlyWithCommandModifier
         self.clipboardFallbackDelayMilliseconds = clipboardFallbackDelayMilliseconds
     }
 
     private enum CodingKeys: String, CodingKey {
+        case longPressDurationMilliseconds
         case panelOnlyWithCommandModifier, clipboardFallbackDelayMilliseconds
+    }
+
+    /// 设置页以秒展示与编辑；配置仍以毫秒存储，便于兼容旧版本。
+    public var longPressDurationSeconds: Double {
+        get { Double(longPressDurationMilliseconds) / 1_000 }
+        set {
+            let milliseconds = Int((newValue * 1_000).rounded())
+            longPressDurationMilliseconds = min(max(milliseconds, 500), 10_000)
+        }
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let longPress = try container.decodeIfPresent(Int.self, forKey: .longPressDurationMilliseconds) ?? 3_000
+        longPressDurationMilliseconds = min(max(longPress, 500), 10_000)
         panelOnlyWithCommandModifier =
             try container.decodeIfPresent(Bool.self, forKey: .panelOnlyWithCommandModifier) ?? false
         let delay = try container.decodeIfPresent(Int.self, forKey: .clipboardFallbackDelayMilliseconds) ?? 50
@@ -221,7 +238,7 @@ public struct BehaviorSettings: Codable, Hashable, Sendable {
 }
 
 public struct AppConfig: Codable, Equatable, Sendable {
-    public static let currentVersion = 1
+    public static let currentVersion = 2
 
     public var version: Int
     public var behavior: BehaviorSettings
@@ -251,9 +268,21 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
     public static var defaultTargetApplications: [TargetApplication] {
         [
-            TargetApplication(displayName: "钉钉", bundleIdentifier: "5ZSL2CJU2T.com.dingtalk.mac"),
-            TargetApplication(displayName: "微信", bundleIdentifier: "com.tencent.xinWeChat"),
-            TargetApplication(displayName: "QQ", bundleIdentifier: "com.tencent.qq")
+            TargetApplication(
+                displayName: "钉钉",
+                bundleIdentifier: "5ZSL2CJU2T.com.dingtalk.mac",
+                mode: .observe
+            ),
+            TargetApplication(
+                displayName: "微信",
+                bundleIdentifier: "com.tencent.xinWeChat",
+                mode: .observe
+            ),
+            TargetApplication(
+                displayName: "QQ",
+                bundleIdentifier: "com.tencent.qq",
+                mode: .observe
+            )
         ]
     }
 
