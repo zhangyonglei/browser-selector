@@ -21,13 +21,14 @@ macOS 菜单栏常驻工具：在目标应用（默认钉钉 / 微信 / QQ）里
 - **单实例运行**：启动时持有进程锁并检查同 Bundle ID 实例；重复启动会唤起已运行实例的设置窗口后退出，不会出现多个状态栏图标或重复 EventTap。
 - **长按阈值**：仅对「旁路观察（长按）」的应用生效；「吞掉并回放（点击）」应用点击即处理，不等长按。
 - **链接提取**：AX 祖先链找 `AXURL` / `AXLinkURL`；钉钉常见的只读消息文本区用 `AXRangeForPosition` 按点击位置匹配 URL；再退到选中文本 / 剪贴板兜底（仅当 AX 完全不可用时，默认延迟 50ms，可配置）。
-- **浏览器面板**：纯 AppKit 绘制，不抢焦点；图标 / 默认标记 / `1…9` 快捷键 / ↑↓ / ↩ / esc，右下角有可点击的「取消」。面板显示期间临时注册 Carbon 全局热键，关闭立即注销，不需要输入监控权限。
+- **浏览器面板**：纯 AppKit 绘制，不抢焦点；单击任意一行即可直接打开，也支持图标 / 默认标记 / `1…9` 快捷键 / ↑↓ / ↩ / esc，右下角有可点击的「取消」。面板显示期间临时注册 Carbon 全局热键，关闭立即注销，不需要输入监控权限。
 - **浏览器启动**：`NSWorkspace` 精准指定 App；支持每个浏览器独立的参数模板，`{url}` 占位符，例如 `--incognito --user-data-dir=/tmp/profile {url}`。
 - **未注册浏览器**：设置页可手动添加便携版 / 自定义路径的 `.app`，填路径或 Bundle ID 其一即可。
 - **域名路由**：正则匹配 host 或完整 URL，命中后跳过面板直接打开；规则按顺序执行（仅「吞掉并回放（点击）」模式）。
 - **修饰键**：可选「仅 ⌘+Click 弹面板」，普通点击走规则 / 默认浏览器（仅「吞掉并回放（点击）」模式）。
 - **排除规则**：按 Bundle ID 或窗口标题关键字跳过拦截（标题需要屏幕录制权限）。
 - **权限引导**：菜单与设置页实时显示辅助功能 / 屏幕录制状态，支持重新检测并启动监听。
+- **关于窗口**：菜单 → **关于浏览器选择器** 显示图标、版本号与构建号，版本号取自 `Info.plist`（`project.yml` 的 `CFBundleShortVersionString` / `CFBundleVersion`）。
 
 ## 工程结构
 
@@ -51,6 +52,8 @@ Sources/BrowserSelector/         AppKit 常驻进程
   PickerView.swift / PickerController.swift   AppKit 选择面板
   PanelHotKeyManager.swift       面板期间的 Carbon 全局热键（esc / ↑↓ / ↩ / 1–9）
   Settings*.swift                设置窗口（SwiftUI，按需加载）
+  AboutWindowController.swift    「关于」窗口（版本号来自 Info.plist）
+  AppVersion.swift               读取 CFBundleShortVersionString / CFBundleVersion
   Diagnostics.swift              RSS / footprint / CPU 采样
 
 Tests/BrowserSelectorCoreTests/  32 个单元测试

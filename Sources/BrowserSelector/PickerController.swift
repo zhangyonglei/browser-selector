@@ -117,15 +117,18 @@ final class PickerController {
         let contentView = PickerContentView(
             state: state,
             onSelect: { [weak self] browser in
+                ClickTrace.log("picker select=\(browser.displayName)")
                 self?.dismiss(selecting: browser)
             },
             onCancel: { [weak self] in
+                ClickTrace.log("picker cancel")
                 self?.dismiss(selecting: nil)
             }
         )
         self.contentView = contentView
         panel.contentView = contentView
         panel.setFrame(frame(for: size, near: point), display: false)
+        ClickTrace.log("picker show frame=\(panel.frame) rows=\(browsers.count)")
 
         self.panel = panel
         installMonitors()
@@ -213,6 +216,7 @@ final class PickerController {
         globalMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         ) { [weak self] _ in
+            ClickTrace.log("picker outsideClick")
             self?.dismiss(selecting: nil)
         }
     }

@@ -66,7 +66,7 @@ struct SettingsView: View {
                 .buttonStyle(.plain)
             }
             Spacer(minLength: 0)
-            Text("BrowserSelector 1.0")
+            Text("BrowserSelector \(AppVersion.shortVersion)")
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
                 .padding(.horizontal, 9)

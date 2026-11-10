@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pickerController: PickerController!
     private var settingsWindowController: SettingsWindowController?
     private var settingsCloseObserver: NSObjectProtocol?
+    private var aboutWindowController: AboutWindowController?
+    private var aboutCloseObserver: NSObjectProtocol?
 
     private var statusItem: NSStatusItem?
     private var statusLabelItem: NSMenuItem?
@@ -175,6 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(makeMenuItem("预览选择面板", action: #selector(previewPickerMenuAction), key: ""))
         menu.addItem(makeMenuItem("诊断信息…", action: #selector(showDiagnostics), key: ""))
         menu.addItem(.separator())
+        menu.addItem(makeMenuItem("关于浏览器选择器", action: #selector(openAbout), key: ""))
         menu.addItem(makeMenuItem("退出", action: #selector(quit), key: "q"))
 
         item.menu = menu
@@ -541,6 +544,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             settingsWindowController = controller
         }
         settingsWindowController?.present()
+    }
+
+    @objc private func openAbout() {
+        if aboutWindowController == nil {
+            let controller = AboutWindowController()
+            if let window = controller.window {
+                aboutCloseObserver = NotificationCenter.default.addObserver(
+                    forName: NSWindow.willCloseNotification,
+                    object: window,
+                    queue: .main
+                ) { [weak self] _ in
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        self?.refreshFrontmost()
+                    }
+                }
+            }
+            aboutWindowController = controller
+        }
+        aboutWindowController?.present()
     }
 
     @objc private func togglePause() {

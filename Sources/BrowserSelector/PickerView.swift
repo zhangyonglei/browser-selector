@@ -71,12 +71,16 @@ final class PickerContentView: NSVisualEffectView {
     private let listView = FlippedView()
     private let hostLabel = NSTextField(labelWithString: "")
     private let urlLabel = NSTextField(labelWithString: "")
-    private let hintLabel = NSTextField(labelWithString: "↑↓ 选择 · ↩ 打开 · esc 取消")
-    private let cancelButton = NSButton(title: "取消", target: nil, action: nil)
+    private let hintLabel = NSTextField(labelWithString: "点击直接打开 · ↑↓ 选择 · ↩ 打开 · esc 取消")
+    private let cancelButton = FirstMouseButton(title: "取消", target: nil, action: nil)
     private let topDivider = NSBox()
     private let bottomDivider = NSBox()
 
     override var isFlipped: Bool { true }
+
+    /// 面板展示时 App 不是激活状态，窗口也不是 key window。返回 true 才能让
+    /// 第一次点击落到面板上，否则 AppKit 会把它当作“激活点击”丢弃。
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     init(
         state: PickerState,
@@ -245,6 +249,10 @@ private final class BrowserRowView: NSView {
         didSet { needsDisplay = true }
     }
 
+    private var isPressed = false {
+        didSet { needsDisplay = true }
+    }
+
     private let iconView = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
@@ -253,6 +261,14 @@ private final class BrowserRowView: NSView {
     private var trackingArea: NSTrackingArea?
 
     override var isFlipped: Bool { true }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// 图标 / 文字 / 角标都归到行本身，避免点在子视图上时点到的是不接受
+    /// 首次点击的控件，导致同一行有的地方能点、有的地方点不动。
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        bounds.contains(convert(point, from: superview)) ? self : nil
+    }
 
     init() {
         super.init(frame: .zero)
@@ -320,11 +336,11 @@ private final class BrowserRowView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard isSelected else { return }
-        NSColor.controlAccentColor.withAlphaComponent(0.18).setFill()
+        guard isSelected || isPressed else { return }
+        NSColor.controlAccentColor.withAlphaComponent(isPressed ? 0.30 : 0.18).setFill()
         NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7).fill()
 
-        NSColor.controlAccentColor.withAlphaComponent(0.35).setStroke()
+        NSColor.controlAccentColor.withAlphaComponent(isPressed ? 0.55 : 0.35).setStroke()
         let border = NSBezierPath(
             roundedRect: bounds.insetBy(dx: 0.4, dy: 0.4),
             xRadius: 7,
@@ -354,8 +370,21 @@ private final class BrowserRowView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        isPressed = true
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isPressed else { return }
+        isPressed = false
+        // 在 mouseUp 里选择：面板会立即关闭，按下/抬起都不再落到下层应用。
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
         onSelect?()
     }
+}
+
+/// 面板是非激活窗口，按钮也要接受第一次点击。
+private final class FirstMouseButton: NSButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 private final class BadgeView: NSView {
