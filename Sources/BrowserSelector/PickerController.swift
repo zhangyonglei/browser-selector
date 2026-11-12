@@ -57,6 +57,7 @@ final class PickerController {
     private var contentView: PickerContentView?
     private var keyMonitor: Any?
     private var globalMonitor: Any?
+    private var pressedRowIndex: Int?
     private var completion: ((BrowserEntry?) -> Void)?
     private var didFinish = false
 
@@ -146,6 +147,7 @@ final class PickerController {
 
         let callback = completion
         completion = nil
+        pressedRowIndex = nil
 
         removeMonitors()
         hotKeys.deactivate()
@@ -167,6 +169,7 @@ final class PickerController {
     private func tearDown() {
         guard panel != nil else { return }
         didFinish = true
+        pressedRowIndex = nil
         removeMonitors()
         hotKeys.deactivate()
         panel?.orderOut(nil)
@@ -176,6 +179,51 @@ final class PickerController {
         state = nil
         completion = nil
         onVisibilityChanged?(false)
+    }
+
+    /// 全局 EventTap 在面板可见时把落在行上的按下交给这里：返回 true 表示
+    /// 这次点击已由面板接管，调用方应吞掉该事件，不再交给 AppKit。
+    func handlePanelPress(atGlobal point: CGPoint) -> Bool {
+        guard !didFinish, let state, let contentView,
+              let contentPoint = contentPoint(fromGlobal: point),
+              let index = contentView.browserIndex(atContentPoint: contentPoint) else {
+            return false
+        }
+        pressedRowIndex = index
+        state.select(index)
+        contentView.refreshSelection(scrollToVisible: false)
+        contentView.setPressedRow(index)
+        ClickTrace.log("picker press row=\(index)")
+        return true
+    }
+
+    /// 抬起时只有仍落在按下的那一行才提交选择，保留“按下后拖开即取消”的语义。
+    @discardableResult
+    func handlePanelRelease(atGlobal point: CGPoint) -> Bool {
+        let pressed = pressedRowIndex
+        pressedRowIndex = nil
+        contentView?.setPressedRow(nil)
+
+        guard !didFinish, let state else { return pressed != nil }
+        guard let pressed, state.browsers.indices.contains(pressed),
+              let contentPoint = contentPoint(fromGlobal: point),
+              let index = contentView?.browserIndex(atContentPoint: contentPoint),
+              index == pressed else {
+            ClickTrace.log("picker press cancelled")
+            return true
+        }
+
+        let browser = state.browsers[pressed]
+        ClickTrace.log("picker select=\(browser.displayName) source=EventTap")
+        dismiss(selecting: browser)
+        return true
+    }
+
+    private func contentPoint(fromGlobal point: CGPoint) -> NSPoint? {
+        guard let panel, let contentView else { return nil }
+        let appKitPoint = NSPoint(x: point.x, y: primaryScreenHeight - point.y)
+        guard panel.frame.contains(appKitPoint) else { return nil }
+        return contentView.convert(panel.convertPoint(fromScreen: appKitPoint), from: nil)
     }
 
     @discardableResult

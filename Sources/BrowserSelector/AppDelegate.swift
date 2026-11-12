@@ -259,6 +259,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.pickerController.dismiss(selecting: nil)
             }
         }
+        monitor.onPanelPress = { [weak self] point in
+            self?.pickerController.handlePanelPress(atGlobal: point) ?? false
+        }
+        monitor.onPanelRelease = { [weak self] point in
+            self?.pickerController.handlePanelRelease(atGlobal: point) ?? false
+        }
 
         if monitor.start() {
             clickMonitor = monitor

@@ -117,6 +117,21 @@ final class PickerContentView: NSVisualEffectView {
         row.scrollToVisible(row.bounds)
     }
 
+    /// 面板是 App 不激活时显示的非 key 窗口，AppKit 的首次点击分发在真机上
+    /// 并不可靠；面板可见时改由全局 EventTap 传入内容视图坐标命中行。
+    func browserIndex(atContentPoint point: NSPoint) -> Int? {
+        for (index, row) in rows.enumerated() where convert(row.bounds, from: row).contains(point) {
+            return index
+        }
+        return nil
+    }
+
+    func setPressedRow(_ index: Int?) {
+        for (rowIndex, row) in rows.enumerated() {
+            row.setPressed(rowIndex == index)
+        }
+    }
+
     override func layout() {
         super.layout()
 
@@ -371,6 +386,11 @@ private final class BrowserRowView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         isPressed = true
+    }
+
+    func setPressed(_ pressed: Bool) {
+        guard isPressed != pressed else { return }
+        isPressed = pressed
     }
 
     override func mouseUp(with event: NSEvent) {

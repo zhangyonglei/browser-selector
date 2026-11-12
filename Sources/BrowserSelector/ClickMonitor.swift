@@ -70,6 +70,7 @@ final class ClickMonitor {
     private var pending: PendingState?
     private var pressState: PressState?
     private var pendingLongPress: PressState?
+    private var panelPressSwallowed = false
     private var interaction = InteractionConfiguration()
     private var nextIdentifier: UInt64 = 0
     private let ownPID: pid_t
@@ -80,6 +81,9 @@ final class ClickMonitor {
     var onCandidate: ((ClickCandidate) -> Void)?
     var onLongPressCandidate: ((LongPressCandidate) -> Void)?
     var onOutsideClickWhilePanelVisible: (() -> Void)?
+    /// 面板可见时点击落在浏览器行上：返回 true 表示事件已被面板接管。
+    var onPanelPress: ((CGPoint) -> Bool)?
+    var onPanelRelease: ((CGPoint) -> Bool)?
 
     init(gate: ClickGate, ownPID: pid_t? = nil) {
         self.gate = gate
@@ -139,6 +143,7 @@ final class ClickMonitor {
         pending = nil
         pressState = nil
         pendingLongPress = nil
+        panelPressSwallowed = false
         stateLock.unlock()
     }
 
@@ -210,8 +215,15 @@ final class ClickMonitor {
             return passThrough
         }
         if gate.isPanelVisible {
-            // 面板内部点击交给 AppKit 面板；面板外点击关闭面板并透传。
+            // 落在行上的点击由面板直接接管并吞掉（AppKit 首次点击分发不可靠）；
+            // 其余面板内点击仍交给 AppKit，面板外点击关闭面板并透传。
             if gate.panelContains(event.location) {
+                if onPanelPress?(event.location) == true {
+                    stateLock.lock()
+                    panelPressSwallowed = true
+                    stateLock.unlock()
+                    return nil
+                }
                 return passThrough
             }
             onOutsideClickWhilePanelVisible?()
@@ -286,8 +298,17 @@ final class ClickMonitor {
         }
 
         stateLock.lock()
+        let panelPress = panelPressSwallowed
+        if panelPress {
+            panelPressSwallowed = false
+        }
         let hasPendingClick = pending != nil
         stateLock.unlock()
+
+        if panelPress {
+            _ = onPanelRelease?(event.location)
+            return nil
+        }
 
         if hasPendingClick {
             return handleSwallowMouseUp(event: event)
